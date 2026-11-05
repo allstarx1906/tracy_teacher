@@ -1,0 +1,33 @@
+# Render Blueprint — Bài Nhà (Docker + persistent disk)
+# Tài liệu thao tác: README-DEPLOY.md (mục Render). Không tự deploy từ repo này.
+#
+# Sau khi tạo Web Service, đặt PUBLIC_ORIGIN = URL HTTPS Render (vd. https://bai-nha-xxxx.onrender.com).
+# Disk: https://render.com/docs/disks
+# Blueprint: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: bai-nha
+    runtime: docker
+    plan: starter
+    autoDeploy: false
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: "10000"
+      - key: DATA_DIR
+        value: /var/lib/bai-nha
+      - key: SECURE_COOKIE
+        value: "1"
+      - key: PUBLIC_ORIGIN
+        sync: false
+      - key: SETUP_TOKEN
+        sync: false
+    disk:
+      name: bai-data
+      mountPath: /var/lib/bai-nha
+      sizeGB: 1

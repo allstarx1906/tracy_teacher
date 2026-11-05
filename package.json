@@ -1,0 +1,15 @@
+{
+  "name": "bai-nha-demo",
+  "private": true,
+  "description": "Local-only Bài Nhà prototype for IELTS/TOEIC teaching",
+  "type": "module",
+  "dependencies": {
+    "pdfjs-dist": "6.5.438"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test tests/index.js",
+    "migrate:json-to-sqlite": "node tools/migrate-json-to-sqlite.mjs",
+    "backup:sqlite": "node tools/backup-sqlite-data.mjs"
+  }
+}

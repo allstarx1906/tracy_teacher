@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Bài Nhà — Lớp IELTS/TOEIC (phát triển cục bộ)</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Điều hướng chính">
+        <div>
+          <h1 class="wordmark">
+            Bài Nhà
+            <small>Phát triển cục bộ · Máy chủ Node</small>
+          </h1>
+        </div>
+        <div class="profile-chip" id="sidebar-profile">
+          <div class="avatar" id="teacher-avatar" aria-hidden="true">TH</div>
+          <div>
+            <div id="profile-name">Cô Lan</div>
+            <div style="font-size: 0.75rem; opacity: 0.8" id="profile-role">Giáo viên</div>
+          </div>
+        </div>
+        <nav>
+          <ul class="nav-list" id="sidebar-nav"></ul>
+        </nav>
+      </aside>
+
+      <div class="main-wrap">
+        <div class="demo-banner" role="status">
+          Môi trường phát triển cục bộ — đăng nhập thật, dữ liệu trên máy chủ Node tại 127.0.0.1. Không gửi Zalo thật.
+        </div>
+        <header class="top-header">
+          <div class="header-date" id="header-date"></div>
+          <div class="header-actions">
+            <span class="save-status ok" id="save-status" aria-live="polite">Đã lưu</span>
+            <div class="role-toggle" role="group" aria-label="Vai trò xem trước" hidden>
+              <button type="button" id="role-teacher" class="active">Giáo viên</button>
+              <button type="button" id="role-student">Học sinh</button>
+            </div>
+            <select class="student-picker" id="student-preview" hidden aria-label="Chọn học sinh demo"></select>
+            <button type="button" class="btn btn-primary" id="header-create" hidden></button>
+          </div>
+        </header>
+        <main class="content" id="app-root" tabindex="-1"></main>
+      </div>
+    </div>
+
+    <nav class="bottom-nav" id="bottom-nav" aria-label="Điều hướng di động"></nav>
+
+    <div id="dialog-root"></div>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
