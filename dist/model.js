@@ -2548,11 +2548,56 @@ export function validateAssignmentInput({
   return { ok: true, attachmentIds: ids };
 }
 
+/** Merge schedule fields for class PUT: omit preserves legacy; new rows default to []. */
+export function normalizeClassScheduleForPut(rec, prev = null) {
+  const hasDays = rec && Object.prototype.hasOwnProperty.call(rec, 'scheduleDays');
+  const hasTime = rec && Object.prototype.hasOwnProperty.call(rec, 'scheduleTime');
+  let scheduleDays;
+  let scheduleTime;
+  if (hasDays) {
+    scheduleDays = Array.isArray(rec.scheduleDays)
+      ? rec.scheduleDays.filter((d) => typeof d === 'string' && d.trim()).map((d) => d.trim())
+      : [];
+  } else if (prev) {
+    scheduleDays = Array.isArray(prev.scheduleDays) ? [...prev.scheduleDays] : [];
+  } else {
+    scheduleDays = [];
+  }
+  if (hasTime) {
+    scheduleTime = String(rec.scheduleTime ?? '').trim();
+  } else if (prev) {
+    scheduleTime = String(prev.scheduleTime ?? '').trim();
+  } else {
+    scheduleTime = '';
+  }
+  return { scheduleDays, scheduleTime };
+}
+
 export function validateClassInput({ name, scheduleDays, scheduleTime }) {
   if (!name?.trim()) return { ok: false, error: 'Vui lòng nhập tên lớp.' };
-  if (!scheduleDays?.length) return { ok: false, error: 'Chọn ít nhất một buổi học.' };
-  if (!scheduleTime?.trim()) return { ok: false, error: 'Nhập giờ học.' };
+  if (scheduleDays != null) {
+    if (!Array.isArray(scheduleDays)) return { ok: false, error: 'Lịch lớp không hợp lệ.' };
+    for (const d of scheduleDays) {
+      if (!isStringField(d, 40)) return { ok: false, error: 'Lịch lớp không hợp lệ.' };
+    }
+  }
+  if (scheduleTime != null && scheduleTime !== '' && !isStringField(String(scheduleTime), 20)) {
+    return { ok: false, error: 'Giờ học lớp không hợp lệ.' };
+  }
   return { ok: true };
+}
+
+/** Next non-cancelled session at or after nowIso for a class (by earliest startAt). */
+export function findNextUpcomingClassSession(classSessions, classId, nowIso = new Date().toISOString()) {
+  if (!classId) return null;
+  let best = null;
+  for (const s of classSessions || []) {
+    if (!s || s.classId !== classId) continue;
+    if (s.status === 'cancelled') continue;
+    if (!s.startAt || String(s.startAt) < String(nowIso)) continue;
+    if (!best || s.startAt < best.startAt) best = s;
+  }
+  return best;
 }
 
 export function validateStudentInput({ name, classId }) {

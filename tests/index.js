@@ -27,6 +27,7 @@ import './ux-notify.test.mjs';
 import './ux-form-a11y.test.mjs';
 import './ux-route-navigation.test.mjs';
 import './ux-attendance-schedule.test.mjs';
+import './class-unscheduled-workflow.test.mjs';
 import './ux-attendance-calendar.test.mjs';
 import './ux-grading-actions.test.mjs';
 import './ux-grading-gestures.test.mjs';

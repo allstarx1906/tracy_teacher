@@ -70,6 +70,7 @@ import {
   applyLegacyLocalMigrateRecords,
   validateAssignmentInput,
   validateClassInput,
+  normalizeClassScheduleForPut,
   validateStudentInput,
   getAssignmentsForStudent,
   enrichAssignmentWithAttachments,
@@ -1119,16 +1120,24 @@ export function createServer(options = {}) {
     if (pathname === '/api/teacher/record/classes' && req.method === 'PUT') {
       const bodyRaw = await readJsonBody(req);
       const { operationId, payload: rec } = splitOperationId(bodyRaw);
-      const v = validateClassInput({ name: rec?.name, scheduleDays: rec?.scheduleDays, scheduleTime: rec?.scheduleTime });
+      const liveState = await store.read();
+      const prevPreview = (liveState.classes || []).find((c) => c.id === rec?.id) || null;
+      const scheduleNorm = normalizeClassScheduleForPut(rec || {}, prevPreview);
+      const v = validateClassInput({
+        name: rec?.name,
+        scheduleDays: scheduleNorm.scheduleDays,
+        scheduleTime: scheduleNorm.scheduleTime,
+      });
       if (!v.ok) { error(res, 400, v.error); return; }
       const replayOut = await runWithReplay(store, auth, 'teacher.class.put', operationId, rec, (s) => {
         const idx = s.classes.findIndex((c) => c.id === rec.id);
         const prev = idx >= 0 ? s.classes[idx] : null;
+        const norm = normalizeClassScheduleForPut(rec, prev);
         const row = {
           id: rec.id || prev?.id || randomUUID(),
           name: String(rec.name).trim(),
-          scheduleDays: rec.scheduleDays,
-          scheduleTime: rec.scheduleTime,
+          scheduleDays: norm.scheduleDays,
+          scheduleTime: norm.scheduleTime,
           createdAt: prev?.createdAt || rec.createdAt || new Date().toISOString(),
           kind: prev?.kind,
           status: prev?.status,

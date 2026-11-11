@@ -28,6 +28,7 @@ import {
   buildZaloReminderText,
   validateAssignmentInput,
   validateClassInput,
+  findNextUpcomingClassSession,
   validateStudentInput,
   findDuplicateClassName,
   findDuplicateStudentName,
@@ -137,6 +138,7 @@ import {
   hideCredentialPendingNotice,
 } from './ux-notify.js';
 import { tryRenderBaView, BA_NAV_ITEMS, disposeActiveBaViewScope } from './ba-ui.js';
+import { formatSessionLocal, SESSION_STATUS } from './ba-domain.js';
 import { tryRenderExamView, EXAM_NAV_ITEM } from './exam-ui.js';
 import { examAssignmentTypeBadge } from './exam-domain.js';
 import {
@@ -1554,15 +1556,35 @@ function metric(label, value, extraClass = '') {
   );
 }
 
+function classUpcomingSessionLabel(classId) {
+  const next = findNextUpcomingClassSession(state.data.classSessions, classId);
+  if (next) return formatSessionLocal(next.startAt);
+  return 'Chưa có buổi học';
+}
+
 function nextClassesCard() {
   const card = el('div', { className: 'card' });
   card.appendChild(el('h2', {}, 'Buổi học sắp tới'));
-  for (const c of filteredClasses()) {
+  const now = new Date().toISOString();
+  const allowedClassIds = new Set(filteredClasses().map((c) => c.id));
+  const upcoming = [...(state.data.classSessions || [])]
+    .filter((s) => s.status !== SESSION_STATUS.CANCELLED && String(s.startAt) >= now)
+    .filter((s) => allowedClassIds.has(s.classId))
+    .sort((a, b) => a.startAt.localeCompare(b.startAt))
+    .slice(0, 8);
+  if (!upcoming.length) {
+    card.appendChild(el('p', { className: 'empty-state' }, 'Chưa có buổi học sắp tới.'));
+    return card;
+  }
+  for (const s of upcoming) {
+    const c = state.data.classes.find((x) => x.id === s.classId);
     card.appendChild(
       el('div', { className: 'list-row' },
-        el('div', {}, el('strong', {}, c.name), el('div', { style: 'font-size:0.85rem;color:var(--muted)' },
-          `${c.scheduleDays.join(', ')} · ${c.scheduleTime}`)),
-        el('span', { className: 'badge badge-green' }, `${studentsInClass(c.id).length} học sinh`),
+        el('div', {},
+          el('strong', {}, c?.name || '—'),
+          el('div', { style: 'font-size:0.85rem;color:var(--muted)' }, formatSessionLocal(s.startAt)),
+        ),
+        el('span', { className: 'badge badge-green' }, `${studentsInClass(s.classId).length} học sinh`),
       ),
     );
   }
@@ -1653,8 +1675,7 @@ function renderClasses() {
       },
     },
     el('h3', {}, c.name),
-    el('p', { style: 'font-size:0.9rem;color:var(--muted)' },
-      `${c.scheduleDays.join(', ')} · ${c.scheduleTime}`),
+    el('p', { style: 'font-size:0.9rem;color:var(--muted)' }, classUpcomingSessionLabel(c.id)),
     el('p', {}, `${studentsInClass(c.id).length} học sinh`),
     );
     grid.appendChild(card);
@@ -1680,19 +1701,57 @@ function renderClassDetail(classId) {
   }
   root.appendChild(el('button', { type: 'button', className: 'btn btn-ghost', onClick: () => navigate('#/classes') }, '← Quay lại'));
   root.appendChild(el('h1', { className: 'page-title' }, c.name));
-  root.appendChild(el('button', {
-    type: 'button',
-    className: 'btn btn-secondary',
-    style: 'margin-bottom:1rem',
-    onClick: () => navigate(`#/tutor/schedule/${classId}`),
-  }, 'Lịch gia sư & điểm danh'));
+  root.appendChild(el('div', { className: 'btn-row', style: 'margin-bottom:1rem' },
+    el('button', {
+      type: 'button',
+      className: 'btn btn-secondary',
+      onClick: () => openStudentDialog(classId),
+    }, 'Thêm học sinh'),
+    el('button', {
+      type: 'button',
+      className: 'btn btn-primary',
+      style: 'margin-left:0.5rem',
+      onClick: () => navigate(`#/tutor/schedule/${classId}`),
+    }, 'Tạo buổi học'),
+    el('button', {
+      type: 'button',
+      className: 'btn btn-ghost',
+      style: 'margin-left:0.5rem',
+      onClick: () => navigate(`#/tutor/schedule/${classId}`),
+    }, 'Lịch & điểm danh'),
+  ));
   const learners = studentsInClass(c.id);
   const card1 = el('div', { className: 'card' });
   card1.appendChild(el('h2', {}, 'Học sinh'));
   for (const st of learners) {
     card1.appendChild(el('div', { className: 'list-row' }, el('span', {}, st.name)));
   }
+  if (!learners.length) {
+    card1.appendChild(el('p', { className: 'empty-state' }, 'Chưa có học sinh — dùng Thêm học sinh.'));
+  }
   root.appendChild(card1);
+  const sessionsCard = el('div', { className: 'card', style: 'margin-top:1rem' });
+  sessionsCard.appendChild(el('h2', {}, 'Buổi học sắp tới'));
+  const nowIso = new Date().toISOString();
+  const classSessions = [...(state.data.classSessions || [])]
+    .filter((s) => s.classId === classId && s.status !== SESSION_STATUS.CANCELLED && String(s.startAt) >= nowIso)
+    .sort((a, b) => a.startAt.localeCompare(b.startAt))
+    .slice(0, 6);
+  if (!classSessions.length) {
+    sessionsCard.appendChild(el('p', { className: 'empty-state' }, 'Chưa có buổi học — dùng Tạo buổi học.'));
+  } else {
+    for (const s of classSessions) {
+      sessionsCard.appendChild(el('div', { className: 'list-row' },
+        el('div', {}, el('strong', {}, formatSessionLocal(s.startAt))),
+        el('button', {
+          type: 'button',
+          className: 'btn btn-ghost',
+          onClick: () => navigate(`#/tutor/attendance/${s.id}`),
+        }, 'Điểm danh'),
+      ));
+    }
+  }
+  root.appendChild(sessionsCard);
   const card2 = el('div', { className: 'card', style: 'margin-top:1rem' });
   card2.appendChild(el('h2', {}, 'Bài tập của lớp'));
   for (const a of state.data.assignments.filter((a) => a.classId === c.id)) {
@@ -5012,26 +5071,16 @@ function openClassDialog() {
   if (!isTeacher()) return;
   const err = el('div', { className: 'form-error', role: 'alert' });
   const name = el('input', { type: 'text', id: 'class-name', required: true, autocomplete: 'off' });
-  const time = el('input', { type: 'time', id: 'class-time', value: '19:00', required: true });
-  const days = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'Chủ nhật'];
-  const dayChecks = days.map((d) => {
-    const id = `day-${d}`;
-    return el('label', { style: 'display:block', htmlFor: id },
-      el('input', { type: 'checkbox', value: d, id }),
-      ` ${d}`,
-    );
-  });
   let createBtn;
-  const dayInputs = dayChecks.map((lab) => lab.querySelector('input'));
-  const isDirty = snapshotFormDirty([name, time, ...dayInputs]);
-  registerDirtyProbe(isDirty, { fields: [name, time, ...dayInputs] });
+  const isDirty = snapshotFormDirty([name]);
+  registerDirtyProbe(isDirty, { fields: [name] });
   let pendingCreateId = null;
   let pendingCreateCreatedAt = null;
   let dialogActive = true;
   const formFieldset = el('fieldset', { className: 'dialog-form-body' });
   const formLock = createFormPendingLock({
     fieldsetRoot: formFieldset,
-    controls: [name, time, ...dayInputs],
+    controls: [name],
   });
   const { close, closeAfterSave, isCurrentDialogHost } = openDialog(
     'Tạo lớp mới',
@@ -5047,11 +5096,7 @@ function openClassDialog() {
           createBtn.setAttribute('aria-busy', 'true');
           try {
             err.textContent = '';
-            const selected = dayChecks
-              .map((lab) => lab.querySelector('input'))
-              .filter((i) => i.checked)
-              .map((i) => i.value);
-            const v = validateClassInput({ name: name.value, scheduleDays: selected, scheduleTime: time.value });
+            const v = validateClassInput({ name: name.value });
             if (!v.ok) { err.textContent = v.error; name.focus(); return false; }
             const dup = findDuplicateClassName(state.data.classes, name.value);
             if (dup && !confirm(`Đã có lớp "${dup.name}" với tên tương tự. Vẫn tạo lớp mới?`)) return false;
@@ -5062,24 +5107,17 @@ function openClassDialog() {
             const rec = {
               id: pendingCreateId,
               name: name.value.trim(),
-              scheduleDays: selected,
-              scheduleTime: time.value,
               createdAt: pendingCreateCreatedAt,
             };
             const formMatchesAcknowledgedSnapshot = captureAcknowledgedFormSnapshot(() => ({
               name: name.value,
-              time: time.value,
-              days: dayChecks
-                .map((lab) => lab.querySelector('input'))
-                .filter((i) => i.checked)
-                .map((i) => i.value)
-                .sort(),
             }));
             const ok = await persistWithStatus(() => put('classes', rec), {
               successToast: `Đã tạo lớp "${rec.name}".`,
               logicalKey: `class:create:${pendingCreateId}`,
               replayPayloadSignature: replayPayloadSignature(rec),
               onPersistSuccess: () => {
+                const createdId = pendingCreateId;
                 pendingCreateId = null;
                 pendingCreateCreatedAt = null;
                 if (closePendingFormDialogAfterSuccessfulSave({
@@ -5093,6 +5131,7 @@ function openClassDialog() {
                   onAcknowledged: () => { isDirty.markClean(); },
                   closeAfterSave,
                 })) {
+                  if (createdId) navigate(`#/classes/${createdId}`);
                   render();
                 }
               },
@@ -5126,15 +5165,7 @@ function openClassDialog() {
     el('div', { className: 'form-field' },
       el('label', { htmlFor: 'class-name' }, 'Tên lớp *'),
       name,
-      el('p', { className: 'form-hint' }, 'Ví dụ: IELTS 6.5 — Thứ 3, 5'),
-    ),
-    el('div', { className: 'form-field' },
-      el('label', { htmlFor: 'class-time' }, 'Giờ học *'),
-      time,
-    ),
-    el('div', { className: 'form-field' },
-      el('label', {}, 'Buổi trong tuần *'),
-      ...dayChecks,
+      el('p', { className: 'form-hint' }, 'Sau khi tạo, thêm học sinh và đặt buổi học theo ngày trên màn chi tiết lớp.'),
     ),
   );
 }

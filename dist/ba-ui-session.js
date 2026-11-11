@@ -9,6 +9,7 @@ import {
   BA_WEEKDAY_LABELS,
   formatBaSessionStatus,
   validateHttpMeetingUrl,
+  validateSessionTimes,
 } from './ba-domain.js';
 import {
   baAdhocSession,
@@ -262,11 +263,21 @@ export function renderScheduleView(ctx, root, scope, classId) {
   root.appendChild(el('button', { type: 'button', className: 'btn btn-ghost', onClick: () => ctx.navigate('#/tutor') }, '← Quay lại'));
   root.appendChild(el('h1', { className: 'page-title' }, 'Điểm danh lớp học'));
   const data = ctx.state.data;
-  const classSel = el('select', { className: 'ba-schedule-class-select', 'aria-label': 'Chọn lớp' });
-  for (const c of data.classes || []) {
-    classSel.appendChild(el('option', { value: c.id, selected: c.id === classId }, c.name));
+  const classSel = el('select', {
+    className: 'ba-schedule-class-select',
+    'aria-label': 'Chọn lớp',
+    required: true,
+  });
+  const effectiveClassId = classId || '';
+  if (!effectiveClassId) {
+    classSel.appendChild(el('option', { value: '' }, '— Chọn lớp * —'));
   }
-  classSel.addEventListener('change', () => ctx.navigate(`#/tutor/schedule/${classSel.value}`));
+  for (const c of data.classes || []) {
+    classSel.appendChild(el('option', { value: c.id, selected: c.id === effectiveClassId }, c.name));
+  }
+  classSel.addEventListener('change', () => {
+    if (classSel.value) ctx.navigate(`#/tutor/schedule/${classSel.value}`);
+  });
   root.appendChild(classSel);
   root.appendChild(el('p', { className: 'ba-schedule-calendar-link-row' },
     el('button', {
@@ -293,8 +304,8 @@ export function renderScheduleView(ctx, root, scope, classId) {
       ));
       return;
     }
-    const clsName = ctx.state.data.classes.find((c) => c.id === classSel.value)?.name || classSel.value;
     for (const s of list) {
+      const clsName = ctx.state.data.classes.find((c) => c.id === s.classId)?.name || s.classId;
       sessionsListHost.appendChild(el('div', { className: 'ba-schedule-session-row list-row' },
         el('div', { className: 'ba-schedule-session-info' },
           el('span', { className: 'ba-schedule-session-class' }, clsName),
@@ -317,6 +328,76 @@ export function renderScheduleView(ctx, root, scope, classId) {
     }
   }
   refreshSessionsList();
+
+  const adhocCard = el('div', { className: 'card ba-schedule-adhoc' });
+  adhocCard.appendChild(el('h2', {}, 'Tạo buổi học'));
+  const adDate = el('input', { type: 'date', required: true, 'aria-label': 'Ngày buổi' });
+  const adStart = el('input', { type: 'time', value: '19:00', required: true, 'aria-label': 'Giờ bắt đầu buổi phát sinh' });
+  const adEnd = el('input', { type: 'time', value: '20:00', required: true, 'aria-label': 'Giờ kết thúc buổi phát sinh' });
+  const adNotes = el('input', { type: 'text', 'aria-label': 'Ghi chú buổi phát sinh' });
+  const adMeeting = el('input', { type: 'url', 'aria-label': 'URL học buổi phát sinh' });
+  const adRem = el('input', { type: 'checkbox', id: 'ba-adhoc-rem', 'aria-label': 'Nhắc buổi phát sinh' });
+  const adOff = el('input', { type: 'number', min: '0', value: '0', 'aria-label': 'Phút trước buổi' });
+  const adhocDirty = registerBaViewDirty(scope, [adDate, adStart, adEnd, adNotes, adMeeting, adRem, adOff]);
+  const adhocBtn = el('button', { type: 'button', className: 'btn btn-primary' }, 'Tạo buổi');
+  adhocBtn.addEventListener('click', async () => {
+    if (!classSel.value) { ctx.toastErr('Chọn lớp.'); classSel.focus(); return; }
+    if (!adDate.value) { ctx.toastErr('Chọn ngày buổi.'); adDate.focus(); return; }
+    const mv = validateHttpMeetingUrl(adMeeting.value);
+    if (!mv.ok) { ctx.toastErr(mv.error); return; }
+    const startAt = localDateTimeToUtcIso(adDate.value, adStart.value);
+    const endAt = localDateTimeToUtcIso(adDate.value, adEnd.value);
+    const tv = validateSessionTimes(startAt, endAt);
+    if (!tv.ok) { ctx.toastErr(tv.error); return; }
+    await runBaScopedSubmit(ctx, scope, {
+      guardKey: `ba-adhoc:${classSel.value}`,
+      btn: adhocBtn,
+      fields: [adDate, adStart, adEnd, adNotes, adMeeting, adRem, adOff],
+      dirtyProbe: adhocDirty,
+      readPayload: () => ({
+        classId: classSel.value,
+        startAt,
+        endAt,
+        notes: adNotes.value.trim(),
+        meetingUrl: adMeeting.value.trim(),
+        reminderEnabled: adRem.checked,
+        reminderOffsetMinutes: Number(adOff.value) || 0,
+      }),
+      write: async (body) => {
+        try {
+          await baAdhocSession({ ...body, confirmOverlap: false });
+        } catch (e) {
+          if (e.status !== 409) throw e;
+          if (!window.confirm(`${e.message}\nVẫn tạo buổi?`)) throw e;
+          await baAdhocSession({ ...body, operationId: newBaOperationId(), confirmOverlap: true });
+        }
+      },
+      successMessage: 'Đã tạo buổi.',
+      skipFullRender: true,
+      onSuccess: ({ matchesSnapshot, safeToReset }) => {
+        refreshSessionsList();
+        if (matchesSnapshot) {
+          adDate.value = '';
+          adNotes.value = '';
+          adMeeting.value = '';
+          adRem.checked = false;
+          adOff.value = '0';
+          adhocDirty.markClean?.();
+        }
+        if (safeToReset) ctx.renderApp();
+      },
+    });
+  });
+  adhocCard.appendChild(el('p', { className: 'form-hint' }, 'Lớp: dùng danh sách phía trên. Lịch lặp nâng cao nằm bên dưới.'));
+  adhocCard.appendChild(el('label', {}, 'Ngày * ', adDate));
+  adhocCard.appendChild(el('label', {}, 'Bắt đầu * ', adStart));
+  adhocCard.appendChild(el('label', {}, 'Kết thúc * ', adEnd));
+  adhocCard.appendChild(el('label', {}, 'Ghi chú ', adNotes));
+  adhocCard.appendChild(el('label', {}, 'URL học ', adMeeting));
+  adhocCard.appendChild(el('label', { htmlFor: 'ba-adhoc-rem' }, 'Nhắc ', adRem));
+  adhocCard.appendChild(el('label', {}, 'Phút trước buổi ', adOff));
+  adhocCard.appendChild(adhocBtn);
+  root.appendChild(adhocCard);
   root.appendChild(sessionsCard);
 
   const setupDetails = el('details', { className: 'ba-schedule-setup card' });
@@ -573,70 +654,5 @@ export function renderScheduleView(ctx, root, scope, classId) {
   recurCard.appendChild(previewPre);
   setupInner.appendChild(recurCard);
 
-  const adhocCard = el('div', { className: 'card ba-schedule-adhoc' });
-  adhocCard.appendChild(el('h2', {}, 'Tạo buổi mới'));
-  const adDate = el('input', { type: 'date', 'aria-label': 'Ngày buổi' });
-  const adStart = el('input', { type: 'time', value: '19:00', 'aria-label': 'Giờ bắt đầu buổi phát sinh' });
-  const adEnd = el('input', { type: 'time', value: '20:00', 'aria-label': 'Giờ kết thúc buổi phát sinh' });
-  const adNotes = el('input', { type: 'text', 'aria-label': 'Ghi chú buổi phát sinh' });
-  const adMeeting = el('input', { type: 'url', 'aria-label': 'URL học buổi phát sinh' });
-  const adRem = el('input', { type: 'checkbox', id: 'ba-adhoc-rem', 'aria-label': 'Nhắc buổi phát sinh' });
-  const adOff = el('input', { type: 'number', min: '0', value: '0', 'aria-label': 'Phút trước buổi' });
-  const adhocDirty = registerBaViewDirty(scope, [adDate, adStart, adEnd, adNotes, adMeeting, adRem, adOff]);
-  const adhocBtn = el('button', { type: 'button', className: 'btn btn-primary' }, 'Tạo buổi');
-  adhocBtn.addEventListener('click', async () => {
-    if (!adDate.value) { ctx.toastErr('Chọn ngày buổi.'); return; }
-    const mv = validateHttpMeetingUrl(adMeeting.value);
-    if (!mv.ok) { ctx.toastErr(mv.error); return; }
-    const startAt = localDateTimeToUtcIso(adDate.value, adStart.value);
-    const endAt = localDateTimeToUtcIso(adDate.value, adEnd.value);
-    await runBaScopedSubmit(ctx, scope, {
-      guardKey: `ba-adhoc:${classSel.value}`,
-      btn: adhocBtn,
-      fields: [adDate, adStart, adEnd, adNotes, adMeeting, adRem, adOff],
-      dirtyProbe: adhocDirty,
-      readPayload: () => ({
-        classId: classSel.value,
-        startAt,
-        endAt,
-        notes: adNotes.value.trim(),
-        meetingUrl: adMeeting.value.trim(),
-        reminderEnabled: adRem.checked,
-        reminderOffsetMinutes: Number(adOff.value) || 0,
-      }),
-      write: async (body) => {
-        try {
-          await baAdhocSession({ ...body, confirmOverlap: false });
-        } catch (e) {
-          if (e.status !== 409) throw e;
-          if (!window.confirm(`${e.message}\nVẫn tạo buổi?`)) throw e;
-          await baAdhocSession({ ...body, operationId: newBaOperationId(), confirmOverlap: true });
-        }
-      },
-      successMessage: 'Đã tạo buổi.',
-      skipFullRender: true,
-      onSuccess: ({ matchesSnapshot, safeToReset }) => {
-        refreshSessionsList();
-        if (matchesSnapshot) {
-          adDate.value = '';
-          adNotes.value = '';
-          adMeeting.value = '';
-          adRem.checked = false;
-          adOff.value = '0';
-          adhocDirty.markClean?.();
-        }
-        if (safeToReset) ctx.renderApp();
-      },
-    });
-  });
-  adhocCard.appendChild(el('label', {}, 'Ngày ', adDate));
-  adhocCard.appendChild(el('label', {}, 'Bắt đầu ', adStart));
-  adhocCard.appendChild(el('label', {}, 'Kết thúc ', adEnd));
-  adhocCard.appendChild(el('label', {}, 'Ghi chú ', adNotes));
-  adhocCard.appendChild(el('label', {}, 'URL học ', adMeeting));
-  adhocCard.appendChild(el('label', { htmlFor: 'ba-adhoc-rem' }, 'Nhắc ', adRem));
-  adhocCard.appendChild(el('label', {}, 'Phút trước buổi ', adOff));
-  adhocCard.appendChild(adhocBtn);
-  root.appendChild(adhocCard);
   root.appendChild(setupDetails);
 }
