@@ -10,7 +10,7 @@ import {
 } from './ba-test-helpers.mjs';
 import {
   buildSampleExamPdf,
-  buildBlankDigitalPdf,
+  buildRasterImageOnlyPdf,
   buildTwoColumnExamPdf,
   waitForImportJob,
 } from './exam-fixtures.mjs';
@@ -211,17 +211,19 @@ test('exam E2E: import PDF, publish, assign, student submit score', async (t) =>
   assert.equal(jobLeak.res.status, 403);
 });
 
-test('exam: blank PDF needs OCR and publish blocked', async (t) => {
+test('exam: raster image-only PDF needs OCR and publish blocked', async (t) => {
   const ctx = await startBaTestServer({});
   t.after(async () => {
     await ctx.close();
     fs.rmSync(ctx.dataDir, { recursive: true, force: true });
   });
   const tJar = await teacherSetup(ctx);
-  const { draft } = await importDraft(ctx, tJar, buildBlankDigitalPdf(), []);
+  const { draft } = await importDraft(ctx, tJar, buildRasterImageOnlyPdf(), []);
   assert.equal(draft.needsOcr, true);
+  assert.deepEqual(draft.needsOcrPageNumbers, [1]);
   const check = validateDraftForPublish(draft);
   assert.equal(check.ok, false);
+  assert.ok(check.errors.some((e) => /Trang 1.*lớp chữ/.test(e)));
   const pub = await api(ctx.base, tJar, `/api/teacher/exams/drafts/${draft.id}/publish`, {
     method: 'POST',
     body: {},
@@ -503,4 +505,23 @@ test('exam: submit omits score when showScore is false', async (t) => {
   assert.equal(submit.res.status, 200);
   assert.equal('score10' in submit.data, false);
   assert.equal('correctCount' in submit.data, false);
+});
+
+test('exam: teacher student-preview API is owner-only', async (t) => {
+  const ctx = await startBaTestServer({ initialNow: '2025-06-01T10:00:00.000Z' });
+  t.after(async () => {
+    await ctx.close();
+    fs.rmSync(ctx.dataDir, { recursive: true, force: true });
+  });
+  const tJar = await teacherSetup(ctx);
+  const { sJar } = await setupClassStudent(ctx, tJar);
+  const { draft } = await importDraft(ctx, tJar, buildSampleExamPdf());
+  const versionId = await publishDraft(ctx, tJar, draft);
+
+  const teacherPrev = await api(ctx.base, tJar, `/api/teacher/exams/versions/${versionId}/student-preview`);
+  assert.equal(teacherPrev.res.status, 200);
+  assert.equal(teacherPrev.data.exam.questions[0].correctOptionId, undefined);
+
+  const studentTry = await api(ctx.base, sJar, `/api/teacher/exams/versions/${versionId}/student-preview`);
+  assert.equal(studentTry.res.status, 403);
 });

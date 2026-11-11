@@ -94,7 +94,7 @@ export function buildStudentBottomTabs({ includeExams }) {
     { id: 'assignments', label: 'Bài tập', hash: '#/assignments', icon: 'assignments' },
   ];
   if (includeExams) {
-    tabs.push({ id: 'exams', label: 'Bài thi online', hash: '#/exams', icon: 'exams' });
+    tabs.push({ id: 'exams', label: 'Bài trực tuyến', hash: '#/exams', icon: 'exams' });
   }
   tabs.push({ id: 'settings', label: 'Cài đặt', hash: '#/settings', icon: 'settings' });
   return tabs;
@@ -135,7 +135,7 @@ export function listTeacherMoreMenuItems() {
     { label: 'Báo cáo điểm danh', hash: '#/tutor/reports', group: 'Gia sư' },
     { label: 'Lịch điểm danh học sinh', hash: '#/tutor/attendance-calendar', group: 'Gia sư' },
     { label: 'Lớp gia sư', hash: '#/tutor', group: 'Gia sư', tutorHub: true },
-    { label: 'Bài thi online', hash: '#/exams', group: 'Ứng dụng' },
+    { label: 'Kho đề', hash: '#/exams', group: 'Ứng dụng' },
     { label: 'Tài khoản', hash: '#/accounts', group: 'Ứng dụng' },
     { label: 'Cài đặt', hash: '#/settings', group: 'Ứng dụng' },
   ];

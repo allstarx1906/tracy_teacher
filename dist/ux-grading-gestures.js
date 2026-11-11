@@ -45,9 +45,17 @@ export function createGradingGestureSettlement(deps) {
       nw: gesture.nw,
     });
     if (!mark) return false;
+    if (gesture.highlight) mark.highlight = true;
     const pg = deps.getDraft().pages[deps.getPageIndex()];
-    deps.pushUndo();
+    const stack = deps.getUndoStack(deps.getPageIndex());
+    if (gesture.preEditableSnapshot && stack?.past) {
+      stack.past.push(gesture.preEditableSnapshot);
+      stack.future = [];
+    } else {
+      deps.pushUndo();
+    }
     pg.annotations.push(mark);
+    if (typeof deps.commitAnnotationsFromDraft === 'function') deps.commitAnnotationsFromDraft();
     deps.renderOverlay();
     return true;
   }

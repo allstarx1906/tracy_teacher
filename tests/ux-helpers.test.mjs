@@ -8,6 +8,7 @@ import {
   buildStudentPhotoUploadJobs,
   blobContentFingerprint,
 } from '../dist/model.js';
+import { createMinimalDomElement } from './helper-browser-window.mjs';
 
 test('normalizeDisplayName collapses whitespace and case', () => {
   assert.equal(normalizeDisplayName('  Nguyễn   Văn A  '), 'nguyễn văn a');
@@ -120,4 +121,32 @@ test('blobContentFingerprint hashes bytes deterministically', async () => {
   const b = await blobContentFingerprint(blob);
   assert.equal(a, b);
   assert.match(a, /^[0-9a-f]{64}$/);
+});
+
+test('minimal DOM querySelectorAll splits comma groups before descendant combinators', () => {
+  const root = createMinimalDomElement('div');
+  const inp = createMinimalDomElement('input', { type: 'text' });
+  const wrap = createMinimalDomElement('div', { className: 'wrap' });
+  const ta = createMinimalDomElement('textarea');
+  root.appendChild(inp);
+  wrap.appendChild(ta);
+  root.appendChild(wrap);
+  const both = root.querySelectorAll('input, textarea');
+  assert.equal(both.length, 2);
+  assert.ok(both.some((n) => n.tagName === 'INPUT'));
+  assert.ok(both.some((n) => n.tagName === 'TEXTAREA'));
+  const mixed = root.querySelectorAll('input, .wrap textarea');
+  assert.equal(mixed.length, 2);
+});
+
+test('minimal DOM classList.contains mirrors className and setAttribute(class)', () => {
+  const el = createMinimalDomElement('button', { className: 'a b' });
+  assert.equal(el.classList.contains('a'), true);
+  assert.equal(el.classList.contains('c'), false);
+  el.classList.add('c');
+  assert.equal(el.classList.contains('c'), true);
+  assert.match(String(el.className), /\bc\b/);
+  el.setAttribute('class', 'x');
+  assert.equal(el.classList.contains('x'), true);
+  assert.equal(el.classList.contains('a'), false);
 });

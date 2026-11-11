@@ -32,6 +32,8 @@ export function createDomEventTargetStub(extra = {}) {
       for (const fn of listeners[type] || []) fn(event);
       return true;
     },
+    focus() {},
+    blur() {},
   };
   return target;
 }
@@ -62,6 +64,23 @@ function nodeAttributeValue(node, attr) {
 function nodeMatchesSelector(node, selector) {
   if (!node || node.nodeType !== 1) return false;
   const s = String(selector).trim();
+  if (s.startsWith('#')) {
+    const id = s.slice(1);
+    const nodeId = node.id != null && node.id !== '' ? String(node.id) : nodeAttributeValue(node, 'id');
+    return nodeId === id;
+  }
+  if (s.startsWith('.')) {
+    const cls = s.slice(1).split('.')[0];
+    return domClassIncludes(node, cls);
+  }
+  const attrOnlyVal = s.match(/^\[([^\]=]+)=(["']?)([^\]"']*)\2\]$/);
+  if (attrOnlyVal) {
+    return nodeAttributeValue(node, attrOnlyVal[1]) === attrOnlyVal[3];
+  }
+  const attrOnly = s.match(/^\[([^\]=]+)\]$/);
+  if (attrOnly) {
+    return nodeAttributeValue(node, attrOnly[1]) != null;
+  }
   const taggedAttrVal = s.match(/^([a-z*]+|\*)\[([^\]=]+)=(["']?)([^\]"']*)\3\]$/i);
   if (taggedAttrVal) {
     const tag = taggedAttrVal[1];
@@ -79,17 +98,82 @@ function nodeMatchesSelector(node, selector) {
   }
   if (/^[a-z*]+$/i.test(s)) {
     if (s === '*') return true;
-    return node.tagName === s.toUpperCase();
+    const nodeTag = node.tagName;
+    if (node.namespaceURI === 'http://www.w3.org/2000/svg') {
+      return String(nodeTag).toLowerCase() === s.toLowerCase();
+    }
+    return nodeTag === s.toUpperCase();
   }
   return false;
 }
 
+/** @param {object} node @param {string} attr */
+export function domNodeAttributeValue(node, attr) {
+  return nodeAttributeValue(node, attr);
+}
+
+/** @param {object} root @param {string} attr @param {string} value */
+export function findDomNodeByAttr(root, attr, value) {
+  const want = String(value);
+  return findDomNodes(root, (n) => domNodeAttributeValue(n, attr) === want)[0] ?? null;
+}
+
+/** @param {object} root @param {string} ancestorAttr @param {string} ancestorValue @param {(n: object) => boolean} predicate */
+export function findDomNodeWithinAttr(root, ancestorAttr, ancestorValue, predicate) {
+  const host = findDomNodeByAttr(root, ancestorAttr, ancestorValue);
+  if (!host) return null;
+  return findDomNodes(host, predicate)[0] ?? null;
+}
+
 /** @param {object} root @param {string} selector @param {object[]} acc */
 function collectQuerySelectorAll(root, selector, acc) {
+  const s = String(selector).trim();
+  // Comma-separated top-level groups must split BEFORE descendant (space) combinator handling,
+  // so e.g. `input, textarea, .foo bar` is two groups — not "input," as ancestor of "textarea,...".
+  if (s.includes(',')) {
+    const seen = new Set();
+    for (const part of s.split(',')) {
+      const one = part.trim();
+      if (!one) continue;
+      const inner = [];
+      collectQuerySelectorAll(root, one, inner);
+      for (const n of inner) {
+        if (!seen.has(n)) {
+          seen.add(n);
+          acc.push(n);
+        }
+      }
+    }
+    return;
+  }
+  const spaceAt = s.indexOf(' ');
+  if (spaceAt > 0) {
+    const ancestorSel = s.slice(0, spaceAt).trim();
+    const descSel = s.slice(spaceAt + 1).trim();
+    collectDescendantSelectorMatches(root, ancestorSel, descSel, acc);
+    return;
+  }
   for (const ch of root.childNodes || []) {
     if (ch.nodeType !== 1) continue;
     if (nodeMatchesSelector(ch, selector)) acc.push(ch);
     collectQuerySelectorAll(ch, selector, acc);
+  }
+}
+
+/** @param {object} root @param {string} ancestorSel @param {string} descSel @param {object[]} acc */
+function collectDescendantSelectorMatches(root, ancestorSel, descSel, acc) {
+  for (const ch of root.childNodes || []) {
+    if (ch.nodeType !== 1) continue;
+    if (nodeMatchesSelector(ch, ancestorSel)) {
+      (function walk(n) {
+        for (const c of n.childNodes || []) {
+          if (c.nodeType !== 1) continue;
+          if (nodeMatchesSelector(c, descSel)) acc.push(c);
+          walk(c);
+        }
+      })(ch);
+    }
+    collectDescendantSelectorMatches(ch, ancestorSel, descSel, acc);
   }
 }
 
@@ -155,6 +239,77 @@ function wireTextContent(el) {
   });
 }
 
+function wireClassName(el) {
+  const classTokens = new Set();
+  const classString = () => [...classTokens].join(' ');
+  const syncClassAttributes = () => {
+    const cls = classString();
+    if (cls) {
+      el.attributes.class = cls;
+      el.attributes.className = cls;
+    } else {
+      delete el.attributes.class;
+      delete el.attributes.className;
+    }
+  };
+  const ingest = (value) => {
+    classTokens.clear();
+    for (const t of String(value || '').split(/\s+/)) {
+      if (t) classTokens.add(t);
+    }
+    syncClassAttributes();
+  };
+  if (el.className != null && el.className !== '') ingest(el.className);
+  else if (el.attributes?.class != null) ingest(el.attributes.class);
+  else if (el.attributes?.className != null) ingest(el.attributes.className);
+
+  Object.defineProperty(el, 'className', {
+    configurable: true,
+    enumerable: true,
+    get() {
+      return classString();
+    },
+    set(value) {
+      ingest(value);
+    },
+  });
+  el.classList = {
+    add(...tokens) {
+      for (const t of tokens) if (t) classTokens.add(t);
+      syncClassAttributes();
+    },
+    remove(...tokens) {
+      for (const t of tokens) classTokens.delete(t);
+      syncClassAttributes();
+    },
+    toggle(token) {
+      if (classTokens.has(token)) classTokens.delete(token);
+      else classTokens.add(token);
+      syncClassAttributes();
+    },
+    contains(token) {
+      if (token == null || token === '') return false;
+      return classTokens.has(String(token));
+    },
+  };
+
+  const baseSetAttribute = el.setAttribute.bind(el);
+  el.setAttribute = (name, value) => {
+    baseSetAttribute(name, value);
+    if (name === 'class') ingest(value);
+  };
+  const baseRemoveAttribute = el.removeAttribute?.bind(el);
+  if (baseRemoveAttribute) {
+    el.removeAttribute = (name) => {
+      baseRemoveAttribute(name);
+      if (name === 'class' || name === 'className') {
+        classTokens.clear();
+        syncClassAttributes();
+      }
+    };
+  }
+}
+
 function wireInputValue(el) {
   let current = el.attributes.value ?? '';
   Object.defineProperty(el, 'value', {
@@ -203,22 +358,22 @@ function wireSelectValue(el) {
 
 /**
  * @param {string} tag
- * @param {Record<string, unknown>} [extra]
+ * @param {{ namespaceURI?: string | null } & Record<string, unknown>} [extra]
  */
 export function createMinimalDomElement(tag, extra = {}) {
-  const tagName = String(tag).toUpperCase();
-  const { isConnected: _dropConnected, ...restExtra } = extra;
+  const ns = extra.namespaceURI ?? null;
+  const rawTag = String(tag);
+  const tagName = ns === 'http://www.w3.org/2000/svg'
+    ? rawTag
+    : rawTag.toUpperCase();
+  const { isConnected: _dropConnected, namespaceURI: _nsDrop, ...restExtra } = extra;
   const el = createDomEventTargetStub({
     tagName,
     nodeType: 1,
     parentNode: null,
     firstChild: null,
     _forceConnected: false,
-    classList: {
-      add() {},
-      toggle() {},
-      remove() {},
-    },
+    namespaceURI: ns,
     ...restExtra,
   });
 
@@ -265,7 +420,26 @@ export function createMinimalDomElement(tag, extra = {}) {
       el.value = String(value);
     }
     if (name === 'id') el.id = String(value);
+    if (name === 'src' && (tagName === 'AUDIO' || tagName === 'VIDEO' || tagName === 'IMG' || tagName === 'SOURCE')) {
+      el.src = String(value);
+    }
   };
+  if (tagName === 'AUDIO' || tagName === 'VIDEO' || tagName === 'IMG' || tagName === 'SOURCE') {
+    Object.defineProperty(el, 'src', {
+      configurable: true,
+      enumerable: true,
+      get() {
+        return el.attributes.src ?? el.getAttribute('src') ?? '';
+      },
+      set(v) {
+        if (v == null || v === '') {
+          delete el.attributes.src;
+        } else {
+          el.attributes.src = String(v);
+        }
+      },
+    });
+  }
   el.getAttribute = (name) => (name in el.attributes ? el.attributes[name] : null);
   el.removeAttribute = (name) => {
     delete el.attributes[name];
@@ -290,6 +464,49 @@ export function createMinimalDomElement(tag, extra = {}) {
   }
 
   wireHiddenIdl(el);
+  wireClassName(el);
+
+  if (tagName === 'A') {
+    el.click = function click() {
+      el.dispatchEvent({ type: 'click', bubbles: true, cancelable: true, target: el });
+    };
+  }
+
+  if (tagName === 'CANVAS') {
+    el.getContext = () => ({
+      clearRect() {},
+      fillRect() {},
+      strokeRect() {},
+      drawImage() {},
+      save() {},
+      restore() {},
+      translate() {},
+      scale() {},
+      transform() {},
+      setTransform() {},
+      beginPath() {},
+      closePath() {},
+      moveTo() {},
+      lineTo() {},
+      rect() {},
+      clip() {},
+      fill() {},
+      stroke() {},
+      measureText() {
+        return { width: 0 };
+      },
+      fillText() {},
+      strokeText() {},
+      createImageData() {
+        return { data: new Uint8ClampedArray(4), width: 1, height: 1 };
+      },
+      getImageData() {
+        return { data: new Uint8ClampedArray(4), width: 1, height: 1 };
+      },
+      putImageData() {},
+      canvas: el,
+    });
+  }
 
   return el;
 }
@@ -339,9 +556,16 @@ export function domElementIsHidden(node) {
 export function createMinimalDocument(options = {}) {
   const nodes = new Map();
   let idSeq = 0;
+  const body = createMinimalDomElement('body');
+  body._forceConnected = true;
+  body.querySelector = (selector) => body.querySelectorAll(selector)[0] ?? null;
 
   const documentStub = {
     cookie: options.cookie ?? '',
+    body,
+    querySelector(selector) {
+      return body.querySelector(selector);
+    },
     getElementById(id) {
       if (id === 'app-root') {
         if (!nodes.has(id)) {
@@ -355,6 +579,11 @@ export function createMinimalDocument(options = {}) {
     },
     createElement(tag) {
       const el = createMinimalDomElement(tag);
+      el.id = el.attributes.id || `n-${idSeq += 1}`;
+      return el;
+    },
+    createElementNS(namespaceURI, qualifiedName) {
+      const el = createMinimalDomElement(qualifiedName, { namespaceURI: namespaceURI ?? null });
       el.id = el.attributes.id || `n-${idSeq += 1}`;
       return el;
     },
@@ -380,6 +609,9 @@ export function createMinimalDocument(options = {}) {
 export function installBaDomEnvironment(t, options = {}) {
   const originalWindow = globalThis.window;
   const originalDocument = globalThis.document;
+  const originalBlob = globalThis.Blob;
+  const originalCreateObjectURL = globalThis.URL?.createObjectURL;
+  const originalRevokeObjectURL = globalThis.URL?.revokeObjectURL;
   const handlers = new Map();
 
   const windowStub = {
@@ -395,11 +627,30 @@ export function installBaDomEnvironment(t, options = {}) {
   }
   globalThis.window = windowStub;
   globalThis.document = createMinimalDocument({ cookie: options.cookie });
+  if (typeof globalThis.Blob !== 'function') {
+    globalThis.Blob = class Blob {
+      constructor(parts = [], opts = {}) {
+        this.type = opts.type || '';
+        const chunks = parts.map((p) => (p instanceof Uint8Array ? p : Buffer.from(p)));
+        this._data = chunks.length ? Buffer.concat(chunks) : Buffer.alloc(0);
+      }
+    };
+  }
+  if (globalThis.URL) {
+    globalThis.URL.createObjectURL = globalThis.URL.createObjectURL || (() => 'blob:exam-test');
+    globalThis.URL.revokeObjectURL = globalThis.URL.revokeObjectURL || (() => {});
+  }
 
   t.after(() => {
     registerDirtyProbe(null);
     globalThis.window = originalWindow;
     globalThis.document = originalDocument;
+    if (originalBlob === undefined) delete globalThis.Blob;
+    else globalThis.Blob = originalBlob;
+    if (globalThis.URL) {
+      if (originalCreateObjectURL) globalThis.URL.createObjectURL = originalCreateObjectURL;
+      if (originalRevokeObjectURL) globalThis.URL.revokeObjectURL = originalRevokeObjectURL;
+    }
   });
 
   return {
@@ -492,8 +743,8 @@ export async function waitForDomCondition(root, predicate, opts = {}) {
   return predicate(root);
 }
 
-function domClassIncludes(node, token) {
-  return domElementClassName(node).split(/\s+/).includes(token);
+export function domClassIncludes(node, token) {
+  return domElementClassName(node).split(/\s+/).filter(Boolean).includes(token);
 }
 
 export function findReportsStatusNode(root) {

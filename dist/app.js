@@ -136,8 +136,9 @@ import {
   showCredentialPendingNotice,
   hideCredentialPendingNotice,
 } from './ux-notify.js';
-import { tryRenderBaView, parseBaRoute, BA_NAV_ITEMS, disposeActiveBaViewScope } from './ba-ui.js';
-import { tryRenderExamView, parseExamRoute, EXAM_NAV_ITEM } from './exam-ui.js';
+import { tryRenderBaView, BA_NAV_ITEMS, disposeActiveBaViewScope } from './ba-ui.js';
+import { tryRenderExamView, EXAM_NAV_ITEM } from './exam-ui.js';
+import { examAssignmentTypeBadge } from './exam-domain.js';
 import {
   filterNavItemsForRole,
   resolveSidebarNavActive,
@@ -177,6 +178,7 @@ import {
   disposeAuthorizedDialogHost,
 } from './ux-dialog-host.js';
 import { createAppHashNavigation } from './ux-hash-navigation.js';
+import { parseAppRoute } from './ux-app-route.js';
 import {
   guardStudentPhotoMutation,
   isStudentPhotoMutationBlocked,
@@ -236,6 +238,7 @@ const state = {
     assignments: [],
     submissions: [],
     settings: { teacherName: 'Giáo viên' },
+    examAssignments: [],
   },
   imageUrlCache: new Map(),
   gradingSession: null,
@@ -244,31 +247,7 @@ const state = {
 };
 
 function parseRoute() {
-  const hash = location.hash.replace(/^#/, '') || '/dashboard';
-  const parts = hash.split('/').filter(Boolean);
-  if (parts[0] === 'grading' && parts[1]) {
-    return {
-      view: 'grading-editor',
-      assignmentId: parts[1],
-      studentId: parts[2] || null,
-    };
-  }
-  if (parts[0] === 'classes') {
-    if (parts[1]) return { view: 'class-detail', classId: parts[1] };
-    return { view: 'classes' };
-  }
-  const ba = parseBaRoute(parts);
-  if (ba) return ba;
-  const exam = parseExamRoute(parts);
-  if (exam) return exam;
-  if (parts[0] === 'assignment' && parts[1]) {
-    return { view: 'assignment-detail', assignmentId: parts[1] };
-  }
-  const view = parts[0] || 'dashboard';
-  if (view === 'change-password') return { view: 'change-password' };
-  if (view === 'accounts') return { view: 'accounts' };
-  if (view === 'settings') return { view: 'settings' };
-  return { view, classId: null, assignmentId: null, studentId: null };
+  return parseAppRoute(location.hash);
 }
 
 function disposeModalHostForAuthorizedNavigation() {
@@ -1331,11 +1310,14 @@ function renderNav() {
   if (authedNav) {
     for (const item of filterNavItemsForRole(NAV, { isTeacher: isTeacher() })) {
       const active = resolveSidebarNavActive(item, state.route);
+      const label = item.id === 'exams' && !isTeacher() && item.studentLabel
+        ? item.studentLabel
+        : item.label;
       const link = el('a', {
         href: item.hash,
         className: active ? 'active' : '',
         'aria-current': active ? 'page' : null,
-      }, item.label);
+      }, label);
       side.appendChild(el('li', {}, link));
     }
   }
@@ -1448,6 +1430,10 @@ function setupHeaderCreate() {
     btn.hidden = false;
     btn.textContent = 'Tạo bài tập';
     btn.onclick = () => openAssignmentDialog();
+  } else if (v === 'exams' && isTeacher()) {
+    btn.hidden = false;
+    btn.textContent = 'Tải đề PDF';
+    btn.onclick = () => navigate('#/exams/import');
   } else {
     btn.hidden = true;
     btn.onclick = null;
@@ -1729,25 +1715,87 @@ function visibleAssignments() {
   return state.data.assignments.filter((a) => !state.classFilterId || a.classId === state.classFilterId);
 }
 
+function visibleOnlineExamAssignments() {
+  const list = state.data.examAssignments || [];
+  return list.filter((a) => !state.classFilterId || a.classId === state.classFilterId);
+}
+
+function onlineExamStatusLabel(a) {
+  if (state.role === 'teacher') return examAssignmentTypeBadge(a);
+  if (a.status === 'submitted') return 'Đã nộp';
+  if (a.status === 'in-progress') return 'Đang làm';
+  if (a.status === 'past-due') return 'Quá hạn';
+  if (a.status === 'not-open') return 'Chưa mở';
+  return examAssignmentTypeBadge(a);
+}
+
 function renderAssignments() {
   const root = document.getElementById('app-root');
   clear(root);
   root.appendChild(el('h1', { className: 'page-title' }, 'Bài tập'));
-  if (state.role === 'teacher') root.appendChild(classFilterSelect());
-  for (const a of visibleAssignments()) {
+  if (state.role === 'teacher') {
+    root.appendChild(classFilterSelect());
+    root.appendChild(el('div', { className: 'btn-row', style: 'margin-bottom:0.75rem' },
+      el('button', {
+        type: 'button',
+        className: 'btn btn-secondary',
+        onClick: () => navigate('#/exams'),
+      }, 'Giao từ kho đề'),
+    ));
+  }
+  const photoRows = visibleAssignments();
+  const onlineRows = visibleOnlineExamAssignments();
+  const merged = [
+    ...photoRows.map((a) => ({ kind: 'photo', row: a, sortKey: a.dueDateISO })),
+    ...onlineRows.map((a) => ({ kind: 'online', row: a, sortKey: a.dueAt || '' })),
+  ].sort((x, y) => (x.sortKey || '').localeCompare(y.sortKey || ''));
+
+  if (!merged.length) {
+    root.appendChild(el('p', { className: 'empty-state' }, 'Chưa có bài tập cho bộ lọc này.'));
+    return;
+  }
+
+  for (const entry of merged) {
+    if (entry.kind === 'photo') {
+      const a = entry.row;
+      root.appendChild(
+        el('div', { className: 'card', style: 'margin-bottom:0.75rem' },
+          el('div', { className: 'list-row' },
+            el('div', {},
+              el('strong', {}, a.title),
+              el('div', { style: 'font-size:0.85rem;color:var(--muted)' },
+                `${className(a.classId)} · Hạn ${formatDateVi(a.dueDateISO)} · Bài tập ảnh/sách`),
+            ),
+            el('button', {
+              type: 'button',
+              className: 'btn btn-primary',
+              onClick: () => navigate(`#/assignment/${a.id}`),
+            }, 'Chi tiết'),
+          ),
+        ),
+      );
+      continue;
+    }
+    const a = entry.row;
+    const actionLabel = state.role === 'teacher'
+      ? 'Quản lý'
+      : (a.status === 'submitted' ? 'Xem bài' : 'Làm bài');
+    const actionHash = state.role === 'teacher'
+      ? `#/exams/grade/${a.id}`
+      : `#/exams/take/${a.id}`;
     root.appendChild(
       el('div', { className: 'card', style: 'margin-bottom:0.75rem' },
         el('div', { className: 'list-row' },
           el('div', {},
             el('strong', {}, a.title),
             el('div', { style: 'font-size:0.85rem;color:var(--muted)' },
-              `${className(a.classId)} · Hạn ${formatDateVi(a.dueDateISO)}`),
+              `${className(a.classId)} · Hạn ${formatDateVi(a.dueAt)} · ${onlineExamStatusLabel(a)}`),
           ),
           el('button', {
             type: 'button',
             className: 'btn btn-primary',
-            onClick: () => navigate(`#/assignment/${a.id}`),
-          }, 'Chi tiết'),
+            onClick: () => navigate(actionHash),
+          }, actionLabel),
         ),
       ),
     );

@@ -19,6 +19,30 @@ export function findExamAssignment(state, id) {
   return state.examAssignments.find((a) => a.id === id) || null;
 }
 
+/** Resolve published version for an attempt; falls back to assignment.versionId when attempt omits versionId. */
+export function resolveAttemptVersion(state, attempt) {
+  if (!attempt) return null;
+  const assignment = findExamAssignment(state, attempt.assignmentId);
+  const versionId = attempt.versionId || assignment?.versionId;
+  if (!versionId) return null;
+  return findExamVersion(state, versionId);
+}
+
+export function resolveAttemptExamContext(state, attempt) {
+  if (!attempt) return { assignment: null, version: null };
+  const assignment = findExamAssignment(state, attempt.assignmentId);
+  const version = resolveAttemptVersion(state, attempt);
+  return { assignment, version };
+}
+
+export function teacherOwnsExamAttempt(state, attempt, teacherAccountId) {
+  const { assignment, version } = resolveAttemptExamContext(state, attempt);
+  if (!assignment || assignment.teacherAccountId !== teacherAccountId) return false;
+  if (!version) return false;
+  if (version.teacherAccountId && version.teacherAccountId !== teacherAccountId) return false;
+  return true;
+}
+
 export function findExamImportJob(state, id) {
   return state.examImports.find((j) => j.id === id) || null;
 }

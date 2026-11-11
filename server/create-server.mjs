@@ -10,6 +10,7 @@ import {
   validateAttachmentBuffer,
   validateTeacherAttachmentIdList,
   attachmentContentDigest,
+  sanitizeAttachmentBasename,
 } from './attachments.mjs';
 import { assertMutationHeaders, assertAttachmentUploadHeaders as checkAttachmentUploadHeaders } from './request-origin.mjs';
 import {
@@ -50,6 +51,8 @@ import {
   examStudentDataExtension,
 } from './exam-routes.mjs';
 import { markInterruptedJobs, scheduleExamImportProcessing, shutdownExamWorkersForStore } from './exam-worker.mjs';
+import { canAccessExamAttachment } from './exam-unified-access.mjs';
+import { validateExamAudioBuffer } from './exam-audio.mjs';
 import { EXAM_JOB_STATUS } from '../dist/exam-domain.js';
 import {
   SUBMISSION_STATUS,
@@ -111,6 +114,13 @@ async function runWithReplay(store, auth, action, operationId, payloadForHash, w
   } catch (e) {
     if (e?.message === 'session-revoked') {
       return { ok: false, status: 401, error: 'Phiên đăng nhập không còn hợp lệ.' };
+    }
+    const msg = String(e?.message || '');
+    if (msg === 'stale-undo' || msg === 'no-undo') {
+      return { ok: false, status: 409, error: msg };
+    }
+    if (msg === 'missing' || msg === 'missing-version' || msg === 'missing-class') {
+      return { ok: false, status: 404, error: msg };
     }
     throw e;
   }
@@ -333,7 +343,8 @@ function canAccessAttachment(state, auth, attachmentId, getNow = () => new Date(
   const meta = state.attachmentMeta?.[attachmentId];
   if (!meta) return false;
   if (auth.role === 'teacher') {
-    return meta.ownerAccountId === auth.account.id;
+    if (meta.ownerAccountId === auth.account.id) return true;
+    return canAccessExamAttachment(state, auth, attachmentId, getNow);
   }
   const student = auth.student || state.students.find((s) => s.id === auth.studentId);
   if (!student) return false;
@@ -342,7 +353,7 @@ function canAccessAttachment(state, auth, attachmentId, getNow = () => new Date(
     if (!studentCanAccessAssignmentClass(student, a.classId, state.memberships || [], atIso)) continue;
     if ((a.attachmentIds || []).includes(attachmentId)) return true;
   }
-  return false;
+  return canAccessExamAttachment(state, auth, attachmentId, getNow);
 }
 
 function canAccessImage(state, auth, imageId) {
@@ -370,6 +381,7 @@ function generateTempPassword() {
 function publicMe(auth) {
   const acc = auth.account;
   return {
+    id: acc.id,
     role: auth.role,
     username: acc.username,
     displayName: acc.displayName || acc.username,
@@ -970,6 +982,61 @@ export function createServer(options = {}) {
   }
 
   async function handleTeacherMutation(req, res, pathname, hostHeader, cookies, auth, state) {
+    const teacherAttMatch = pathname.match(/^\/api\/teacher\/attachments\/([^/]+)$/);
+    if (teacherAttMatch && (req.method === 'GET' || req.method === 'HEAD')) {
+      const attachmentId = teacherAttMatch[1];
+      const liveState = await store.read();
+      if (!canAccessAttachment(liveState, auth, attachmentId, getNow)) {
+        error(res, 403, 'Không có quyền.');
+        return;
+      }
+      const buf = await store.readAttachment(attachmentId);
+      if (!buf) {
+        error(res, 404, 'Không tìm thấy.');
+        return;
+      }
+      const meta = liveState.attachmentMeta[attachmentId];
+      const mime = meta?.mime || 'application/octet-stream';
+      const inline = mime.startsWith('image/') || mime.startsWith('audio/') || mime === 'application/pdf';
+      const headers = {
+        'Content-Type': mime,
+        'Content-Disposition': encodeContentDisposition(meta?.filename || 'file', inline),
+        'Cache-Control': 'private, no-store',
+        'X-Content-Type-Options': 'nosniff',
+        'Accept-Ranges': 'bytes',
+      };
+      if (mime === 'application/pdf') {
+        headers['Content-Security-Policy'] = "default-src 'none'; sandbox";
+      }
+      const range = req.headers.range;
+      const total = buf.length;
+      if (range && /^bytes=\d*-\d*$/.test(range) && mime.startsWith('audio/')) {
+        const m = range.match(/bytes=(\d*)-(\d*)/);
+        let start = m[1] ? parseInt(m[1], 10) : 0;
+        let end = m[2] ? parseInt(m[2], 10) : total - 1;
+        if (Number.isNaN(start)) start = 0;
+        if (Number.isNaN(end) || end >= total) end = total - 1;
+        if (start > end || start >= total) {
+          res.writeHead(416, { 'Content-Range': `bytes */${total}` });
+          res.end();
+          return;
+        }
+        const chunk = buf.slice(start, end + 1);
+        res.writeHead(206, {
+          ...headers,
+          'Content-Range': `bytes ${start}-${end}/${total}`,
+          'Content-Length': chunk.length,
+        });
+        if (req.method === 'HEAD') res.end();
+        else res.end(chunk);
+        return;
+      }
+      res.writeHead(200, { ...headers, 'Content-Length': total });
+      if (req.method === 'HEAD') res.end();
+      else res.end(buf);
+      return;
+    }
+
     if (pathname === '/api/teacher/attachments' && req.method === 'POST') {
       if (!attachmentUploadHeaders(req, hostHeader, cookies.bn_csrf, req.headers['x-bn-csrf'])) {
         error(res, 403, 'Yêu cầu không hợp lệ.');
@@ -989,10 +1056,18 @@ export function createServer(options = {}) {
         throw e;
       }
       const declaredMime = String(req.headers['content-type'] || '').split(';')[0].trim();
-      const checked = validateAttachmentBuffer(buf, rawName, declaredMime);
+      let checked = validateAttachmentBuffer(buf, rawName, declaredMime);
       if (!checked.ok) {
-        error(res, 400, checked.error);
-        return;
+        const audioChecked = validateExamAudioBuffer(buf, rawName, declaredMime);
+        if (!audioChecked.ok) {
+          error(res, 400, checked.error);
+          return;
+        }
+        checked = {
+          ok: true,
+          mime: audioChecked.mime,
+          filename: sanitizeAttachmentBasename(rawName),
+        };
       }
       const id = randomUUID();
       const meta = {

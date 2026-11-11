@@ -2,6 +2,26 @@
  * App hash navigation: same-route no-op and canceled back/forward restore without re-render.
  */
 
+/**
+ * Split `#/path/segments?query` into path (no leading `#`) and raw query (no `?`).
+ * Mirrors parseRoute default when hash is empty.
+ * @param {string} [hash]
+ * @returns {{ path: string, query: string }}
+ */
+export function splitAppHashPathAndQuery(hash) {
+  const trimmed = hash == null ? '' : String(hash).trim();
+  const withoutHash = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed;
+  const pathRaw = withoutHash || '/dashboard';
+  const qIndex = pathRaw.indexOf('?');
+  if (qIndex === -1) {
+    return { path: pathRaw, query: '' };
+  }
+  return {
+    path: pathRaw.slice(0, qIndex) || '/dashboard',
+    query: pathRaw.slice(qIndex + 1),
+  };
+}
+
 export function normalizeAppHash(hash) {
   const trimmed = hash == null ? '' : String(hash).trim();
   if (!trimmed || trimmed === '#') {

@@ -128,6 +128,10 @@ let dirtyTransitionCleanup = null;
  * @param {(() => boolean)|null} fn
  * @param {{ fields?: Array<{ addEventListener: Function, removeEventListener: Function }>, onQueueTransition?: (handler: () => void) => (() => void)|void }} [watch]
  */
+export function getDirtyProbe() {
+  return globalDirtyProbe;
+}
+
 export function registerDirtyProbe(fn, watch = null) {
   dirtyTransitionCleanup?.();
   dirtyTransitionCleanup = null;

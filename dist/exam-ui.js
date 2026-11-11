@@ -1,5 +1,14 @@
 import { EXAM_NAV_ITEM, parseExamRoute } from './exam-domain.js';
-import { renderExamTeacherHub, renderExamImportView, renderExamDraftEditor, renderExamAssignView } from './exam-ui-teacher.js';
+import {
+  renderExamTeacherHub,
+  renderExamImportView,
+  renderExamComposeView,
+  renderExamDraftEditor,
+  renderExamAssignView,
+  renderExamGradeView,
+  renderExamBankDetailView,
+} from './exam-ui-teacher.js';
+import { renderExamSourceReadView } from './exam-ui-source.js';
 import { renderExamStudentHub, renderExamTakeView } from './exam-ui-student.js';
 import { el } from './ba-ui-dom.js';
 
@@ -27,8 +36,12 @@ export function tryRenderExamView(ctx, route) {
   if (ctx.isTeacher()) {
     if (route.view === 'exams-hub') renderExamTeacherHub(ctx, root);
     else if (route.view === 'exams-import') renderExamImportView(ctx, root);
+    else if (route.view === 'exams-compose') renderExamComposeView(ctx, root);
+    else if (route.view === 'exams-source') renderExamSourceReadView(ctx, root, route.versionId);
+    else if (route.view === 'exams-bank') renderExamBankDetailView(ctx, root, route.bankExamId);
     else if (route.view === 'exams-draft') renderExamDraftEditor(ctx, root, route.draftId);
     else if (route.view === 'exams-assign') renderExamAssignView(ctx, root, route.versionId);
+    else if (route.view === 'exams-grade') renderExamGradeView(ctx, root, route.assignmentId);
     else renderExamTeacherHub(ctx, root);
     return true;
   }

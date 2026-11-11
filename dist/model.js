@@ -808,6 +808,13 @@ export function resolveDirectTextMaxWidthPx(mark, width, height, options = {}) {
 
 export function defaultDirectTextWidthNorm(mark, width, height, options = {}) {
   const w = width || 1;
+  if (mark.textWidthNorm != null && isNorm01(mark.textWidthNorm)) {
+    return mark.textWidthNorm;
+  }
+  const hasText = String(mark?.text || '').trim().length > 0;
+  if (!hasText) {
+    return clamp01(Math.max(MIN_DIRECT_TEXT_WIDTH_NORM, Math.min(0.4, DEFAULT_DIRECT_TEXT_WIDTH_PAGE_FRACTION)));
+  }
   const scaled = scaleMarkToViewport(mark, w, height || 1);
   const pad = options.pad ?? 4;
   const chrome = directTextSelectionChromePx();

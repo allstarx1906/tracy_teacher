@@ -215,6 +215,7 @@ async function processExamImportJob(store, jobId, getNow) {
       }
       Object.assign(existingDraft, draft);
     } else {
+      if (!draft.bankExamId) draft.bankExamId = draftId;
       s.examDrafts.push(draft);
     }
     job.draftId = draftId;
